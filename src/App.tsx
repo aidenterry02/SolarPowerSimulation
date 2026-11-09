@@ -10,17 +10,33 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { SatelliteMap } from "./components/SatelliteMap";
 import { CITIES, cityLabel, searchCities, type City } from "./data/cities";
+import {
+  fetchNearestBuilding,
+  geocodeAddress,
+  type BuildingFootprint,
+  type GeoPoint,
+} from "./lib/geo";
+import {
+  fetchGoogleSolarBuilding,
+  loadGoogleApiKey,
+  saveGoogleApiKey,
+  type GoogleSolarRoof,
+} from "./lib/googleSolar";
 import {
   calculateSolar,
   formatKwh,
   formatSqFt,
   formatUsd,
+  type SatelliteRoofInput,
   type ShadingLevel,
 } from "./lib/solarCalc";
 
 const DEFAULT_CITY =
   CITIES.find((c) => c.name === "Buffalo" && c.state === "NY") ?? CITIES[0];
+
+type AnalyzeStatus = "idle" | "loading" | "done" | "error";
 
 export default function App() {
   const [city, setCity] = useState<City>(DEFAULT_CITY);
@@ -28,6 +44,17 @@ export default function App() {
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(0);
   const blurTimer = useRef<number | null>(null);
+  const analyzeAbort = useRef<AbortController | null>(null);
+
+  const [address, setAddress] = useState("1 Niagara Square, Buffalo, NY");
+  const [googleKey, setGoogleKey] = useState(() => loadGoogleApiKey());
+  const [showKey, setShowKey] = useState(false);
+  const [analyzeStatus, setAnalyzeStatus] = useState<AnalyzeStatus>("idle");
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+  const [geoPoint, setGeoPoint] = useState<GeoPoint | null>(null);
+  const [geoLabel, setGeoLabel] = useState<string | null>(null);
+  const [building, setBuilding] = useState<BuildingFootprint | null>(null);
+  const [googleRoof, setGoogleRoof] = useState<GoogleSolarRoof | null>(null);
 
   const [floorArea, setFloorArea] = useState(1800);
   const [stories, setStories] = useState(2);
@@ -38,6 +65,24 @@ export default function App() {
   const [rateOverride, setRateOverride] = useState<string>("");
 
   const suggestions = useMemo(() => searchCities(query, 10), [query]);
+
+  const satelliteRoof: SatelliteRoofInput | undefined = useMemo(() => {
+    if (googleRoof) {
+      return {
+        source: "google_solar",
+        footprintSqFt: googleRoof.roofAreaSqFt || googleRoof.eligiblePanelAreaSqFt,
+        eligibleSqFt: googleRoof.eligiblePanelAreaSqFt,
+        maxSunshineHoursPerYear: googleRoof.maxSunshineHoursPerYear,
+      };
+    }
+    if (building) {
+      return {
+        source: "satellite_osm",
+        footprintSqFt: building.footprintSqFt,
+      };
+    }
+    return undefined;
+  }, [building, googleRoof]);
 
   const result = useMemo(() => {
     const rate =
@@ -53,6 +98,7 @@ export default function App() {
         rate !== undefined && Number.isFinite(rate) && rate > 0
           ? rate
           : undefined,
+      satelliteRoof,
     });
   }, [
     city,
@@ -63,14 +109,86 @@ export default function App() {
     portion,
     monthlyKwh,
     rateOverride,
+    satelliteRoof,
   ]);
 
   function pickCity(c: City) {
     setCity(c);
     setQuery(cityLabel(c));
     setOpen(false);
-    if (rateOverride.trim() === "") {
-      // keep empty so city default applies
+  }
+
+  function clearSatellite() {
+    setBuilding(null);
+    setGoogleRoof(null);
+    setGeoPoint(null);
+    setGeoLabel(null);
+    setAnalyzeStatus("idle");
+    setAnalyzeError(null);
+  }
+
+  async function analyzeRoof() {
+    analyzeAbort.current?.abort();
+    const ac = new AbortController();
+    analyzeAbort.current = ac;
+
+    setAnalyzeStatus("loading");
+    setAnalyzeError(null);
+    setBuilding(null);
+    setGoogleRoof(null);
+    setGeoPoint(null);
+    setGeoLabel(null);
+
+    try {
+      const fullAddress = address.trim().includes(city.name)
+        ? address.trim()
+        : `${address.trim()}, ${cityLabel(city)}`;
+
+      const geo = await geocodeAddress(fullAddress, ac.signal);
+      if (ac.signal.aborted) return;
+
+      setGeoPoint({ lat: geo.lat, lon: geo.lon });
+      setGeoLabel(geo.displayName);
+
+      // Prefer Google Solar when a key is present; still fetch OSM outline for map
+      const osmPromise = fetchNearestBuilding(
+        { lat: geo.lat, lon: geo.lon },
+        ac.signal
+      ).catch(() => null);
+
+      let gRoof: GoogleSolarRoof | null = null;
+      if (googleKey.trim()) {
+        try {
+          gRoof = await fetchGoogleSolarBuilding(
+            { lat: geo.lat, lon: geo.lon },
+            googleKey,
+            ac.signal
+          );
+        } catch (err) {
+          // Keep going with OSM footprint if Google fails
+          console.warn("Google Solar unavailable:", err);
+        }
+      }
+
+      const osm = await osmPromise;
+      if (ac.signal.aborted) return;
+
+      if (gRoof) setGoogleRoof(gRoof);
+      if (osm) setBuilding(osm);
+
+      if (!gRoof && !osm) {
+        throw new Error(
+          "Could not resolve a roof at that address. Try a more precise street address."
+        );
+      }
+
+      setAnalyzeStatus("done");
+    } catch (err) {
+      if (ac.signal.aborted) return;
+      const message =
+        err instanceof Error ? err.message : "Satellite analysis failed.";
+      setAnalyzeError(message);
+      setAnalyzeStatus("error");
     }
   }
 
@@ -96,6 +214,15 @@ export default function App() {
     Usage: Math.round(m.usageKwh),
   }));
 
+  const roofSourceLabel =
+    result.roofSource === "google_solar"
+      ? "Google Solar (aerial / satellite imagery)"
+      : result.roofSource === "satellite_osm"
+        ? "Satellite map + OSM building outline"
+        : "Home-size heuristic (no address scan yet)";
+
+  const usingSatellite = result.roofSource !== "heuristic";
+
   return (
     <div className="app">
       <header className="topbar">
@@ -103,9 +230,9 @@ export default function App() {
           <span className="brand-kicker">Interactive demo</span>
           <h1>Hometown Solar Savings</h1>
           <p>
-            Pick a U.S. city, estimate eligible roof coverage from your home
-            size, and see how much power and money solar could offset using
-            local average sun and electricity rates.
+            Enter a U.S. address to measure eligible roof area from satellite
+            imagery and building outlines, then estimate solar production and
+            bill savings for your hometown climate.
           </p>
         </div>
         <div className="top-links">
@@ -126,10 +253,10 @@ export default function App() {
 
       <div className="layout">
         <aside className="panel controls">
-          <h2 className="panel-title">Your home</h2>
+          <h2 className="panel-title">Location & roof</h2>
 
           <div className="field">
-            <label htmlFor="city">Hometown</label>
+            <label htmlFor="city">Hometown (rates & climate)</label>
             <div className="city-wrap">
               <input
                 id="city"
@@ -150,7 +277,10 @@ export default function App() {
                   setOpen(true);
                 }}
                 onBlur={() => {
-                  blurTimer.current = window.setTimeout(() => setOpen(false), 150);
+                  blurTimer.current = window.setTimeout(
+                    () => setOpen(false),
+                    150
+                  );
                 }}
                 onKeyDown={onKeyDown}
               />
@@ -172,79 +302,164 @@ export default function App() {
                 </ul>
               )}
             </div>
-            <span className="hint">
-              {city.lat.toFixed(2)}°N, {Math.abs(city.lon).toFixed(2)}°W ·{" "}
-              {CITIES.length} U.S. cities
-            </span>
-          </div>
-
-          <div className="field-row">
-            <div className="field">
-              <label htmlFor="floor">Floor area (sq ft)</label>
-              <input
-                id="floor"
-                className="input"
-                type="number"
-                min={400}
-                max={12000}
-                step={50}
-                value={floorArea}
-                onChange={(e) => setFloorArea(Number(e.target.value) || 0)}
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="stories">Stories</label>
-              <select
-                id="stories"
-                className="select"
-                value={stories}
-                onChange={(e) => setStories(Number(e.target.value))}
-              >
-                <option value={1}>1</option>
-                <option value={2}>2</option>
-                <option value={3}>3</option>
-              </select>
-            </div>
           </div>
 
           <div className="field">
-            <label htmlFor="pitch">Roof pitch</label>
-            <select
-              id="pitch"
-              className="select"
-              value={pitch}
-              onChange={(e) => setPitch(Number(e.target.value))}
+            <label htmlFor="address">Street address</label>
+            <input
+              id="address"
+              className="input"
+              value={address}
+              placeholder="123 Main St"
+              onChange={(e) => setAddress(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void analyzeRoof();
+              }}
+            />
+            <span className="hint">
+              Geocoded, then roof outline measured on satellite basemap.
+            </span>
+          </div>
+
+          <div className="field">
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={analyzeStatus === "loading" || !address.trim()}
+              onClick={() => void analyzeRoof()}
             >
-              <option value={1.0}>Flat / low (1.0×)</option>
-              <option value={1.15}>Moderate (1.15×)</option>
-              <option value={1.3}>Steep (1.3×)</option>
-            </select>
-            <span className="hint">
-              Pitch multiplies footprint to estimate roof surface area.
-            </span>
+              {analyzeStatus === "loading"
+                ? "Scanning satellite…"
+                : "Analyze roof from satellite"}
+            </button>
+            {usingSatellite && (
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={clearSatellite}
+              >
+                Clear satellite roof · use home-size estimate
+              </button>
+            )}
+            {analyzeError && <p className="error-text">{analyzeError}</p>}
+            {analyzeStatus === "done" && !analyzeError && (
+              <p className="ok-text">
+                Roof locked from {roofSourceLabel.toLowerCase()}.
+              </p>
+            )}
           </div>
 
-          <div className="field">
-            <label>Tree / shading</label>
-            <div className="segmented" role="group" aria-label="Shading level">
-              {(
-                [
-                  ["minimal", "Minimal"],
-                  ["moderate", "Moderate"],
-                  ["heavy", "Heavy"],
-                ] as const
-              ).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  className={shading === key ? "active" : ""}
-                  onClick={() => setShading(key)}
+          <details
+            className="advanced"
+            open={showKey}
+            onToggle={(e) => setShowKey((e.target as HTMLDetailsElement).open)}
+          >
+            <summary>Optional: Google Solar API (imagery ML)</summary>
+            <p className="hint" style={{ marginTop: "0.5rem" }}>
+              With a{" "}
+              <a
+                href="https://developers.google.com/maps/documentation/solar/get-api-key"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Maps Platform key
+              </a>{" "}
+              that has the Solar API enabled, eligible panel area comes from
+              Google’s aerial/satellite building model. Key stays in this browser
+              only.
+            </p>
+            <input
+              className="input"
+              type="password"
+              autoComplete="off"
+              placeholder="Google API key"
+              value={googleKey}
+              onChange={(e) => {
+                setGoogleKey(e.target.value);
+                saveGoogleApiKey(e.target.value);
+              }}
+            />
+          </details>
+
+          <hr className="divider" />
+
+          <h2 className="panel-title">System assumptions</h2>
+
+          {!usingSatellite && (
+            <div className="field-row">
+              <div className="field">
+                <label htmlFor="floor">Floor area (sq ft)</label>
+                <input
+                  id="floor"
+                  className="input"
+                  type="number"
+                  min={400}
+                  max={12000}
+                  step={50}
+                  value={floorArea}
+                  onChange={(e) => setFloorArea(Number(e.target.value) || 0)}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="stories">Stories</label>
+                <select
+                  id="stories"
+                  className="select"
+                  value={stories}
+                  onChange={(e) => setStories(Number(e.target.value))}
                 >
-                  {label}
-                </button>
-              ))}
+                  <option value={1}>1</option>
+                  <option value={2}>2</option>
+                  <option value={3}>3</option>
+                </select>
+              </div>
             </div>
-          </div>
+          )}
+
+          {result.roofSource !== "google_solar" && (
+            <div className="field">
+              <label htmlFor="pitch">Roof pitch</label>
+              <select
+                id="pitch"
+                className="select"
+                value={pitch}
+                onChange={(e) => setPitch(Number(e.target.value))}
+              >
+                <option value={1.0}>Flat / low (1.0×)</option>
+                <option value={1.15}>Moderate (1.15×)</option>
+                <option value={1.3}>Steep (1.3×)</option>
+              </select>
+              <span className="hint">
+                {usingSatellite
+                  ? "Applied to satellite footprint to estimate roof surface."
+                  : "Pitch multiplies footprint to estimate roof surface area."}
+              </span>
+            </div>
+          )}
+
+          {result.roofSource !== "google_solar" && (
+            <div className="field">
+              <label>Tree / shading</label>
+              <div className="segmented" role="group" aria-label="Shading level">
+                {(
+                  [
+                    ["minimal", "Minimal"],
+                    ["moderate", "Moderate"],
+                    ["heavy", "Heavy"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={shading === key ? "active" : ""}
+                    onClick={() => setShading(key)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="field">
             <div className="slider-row">
@@ -260,9 +475,6 @@ export default function App() {
               value={Math.round(portion * 100)}
               onChange={(e) => setPortion(Number(e.target.value) / 100)}
             />
-            <span className="hint">
-              Only a portion of the usable roof is covered with panels.
-            </span>
           </div>
 
           <div className="field-row">
@@ -333,7 +545,52 @@ export default function App() {
           </section>
 
           <section className="panel card">
-            <h2>Local weather & roof eligibility</h2>
+            <h2>Satellite roof scan</h2>
+            {geoPoint ? (
+              <>
+                <SatelliteMap
+                  center={googleRoof?.center ?? building?.center ?? geoPoint}
+                  building={building}
+                />
+                {geoLabel && <p className="geo-label">{geoLabel}</p>}
+              </>
+            ) : (
+              <div className="sat-placeholder">
+                Enter a street address and click{" "}
+                <strong>Analyze roof from satellite</strong> to load imagery and
+                measure the building outline.
+              </div>
+            )}
+
+            <div className="meta-grid" style={{ marginTop: "1rem" }}>
+              <div className="meta-item">
+                <div className="k">Roof data source</div>
+                <div className="v">{roofSourceLabel}</div>
+              </div>
+              <div className="meta-item">
+                <div className="k">Footprint / whole roof</div>
+                <div className="v">
+                  {formatSqFt(result.roofFootprintSqFt)} ft²
+                  {googleRoof?.imageryDate
+                    ? ` · imagery ${googleRoof.imageryDate}`
+                    : ""}
+                </div>
+              </div>
+              <div className="meta-item">
+                <div className="k">Eligible for panels</div>
+                <div className="v">
+                  {formatSqFt(result.eligibleRoofSqFt)} ft² · then{" "}
+                  {Math.round(portion * 100)}% covered
+                  {googleRoof?.maxArrayPanelsCount
+                    ? ` · up to ~${googleRoof.maxArrayPanelsCount} panels (Google max)`
+                    : ""}
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="panel card">
+            <h2>Local weather</h2>
             <div className="meta-grid">
               <div className="meta-item">
                 <div className="k">Climate snapshot</div>
@@ -343,17 +600,15 @@ export default function App() {
                 </div>
               </div>
               <div className="meta-item">
-                <div className="k">Roof path</div>
+                <div className="k">Surface after pitch</div>
                 <div className="v">
-                  {formatSqFt(result.roofFootprintSqFt)} ft² footprint →{" "}
-                  {formatSqFt(result.totalRoofAreaSqFt)} ft² surface
+                  {formatSqFt(result.totalRoofAreaSqFt)} ft²
                 </div>
               </div>
               <div className="meta-item">
-                <div className="k">Eligible after setbacks / shade</div>
+                <div className="k">Hometown rates</div>
                 <div className="v">
-                  {formatSqFt(result.eligibleRoofSqFt)} ft² · then{" "}
-                  {Math.round(portion * 100)}% covered
+                  {cityLabel(city)} · {result.ratePerKwh.toFixed(2)}/kWh
                 </div>
               </div>
             </div>
@@ -455,11 +710,12 @@ export default function App() {
           </section>
 
           <p className="disclaimer">
-            Educational demo only — not an installer quote. Roof eligibility uses
-            simple setback, orientation, and shading factors. Sun resource and
-            rates are approximate climate normals and state averages, not
-            site-specific measurements. Real production depends on azimuth, tilt,
-            inverter losses, utility tariffs, and local codes.
+            Educational demo only. Default roof scan uses Esri satellite
+            basemap plus OpenStreetMap building footprints (often traced from
+            imagery). Optional Google Solar API uses Google’s aerial/satellite
+            model for panelable area and sunshine. Not an installer quote —
+            real roofs depend on pitch, obstructions, setbacks, and utility
+            rules. Map data © OpenStreetMap contributors; imagery © Esri.
           </p>
         </main>
       </div>

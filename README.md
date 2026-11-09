@@ -9,9 +9,10 @@ Interactive web demo: pick a U.S. hometown, estimate eligible roof coverage, app
 ## What it does
 
 1. **Hometown picker** — search ~100 U.S. cities with lat/lon, peak sun hours, cloud cover, temperature, and default $/kWh.
-2. **Roof eligibility** — from floor area, stories, pitch, and shading → footprint → surface area → usable area after setbacks/orientation/shade.
-3. **Coverage slider** — install panels on a portion of eligible roof.
-4. **Production & savings** — annual and monthly kWh, % of usage offset, simple before/after bill estimate.
+2. **Satellite roof scan** — enter a street address → geocode → Esri satellite basemap + OpenStreetMap building outline area. Optional [Google Solar API](https://developers.google.com/maps/documentation/solar) key for imagery-ML panelable roof area.
+3. **Roof eligibility** — satellite footprint (or home-size heuristic fallback) → pitch / setbacks / shading → eligible panel area.
+4. **Coverage slider** — install panels on a portion of eligible roof.
+5. **Production & savings** — annual and monthly kWh, % of usage offset, simple before/after bill estimate.
 
 ## Run locally
 

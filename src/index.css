@@ -478,3 +478,121 @@ input[type="range"] {
   font-size: 0.8rem;
   text-align: center;
 }
+
+.btn-primary {
+  width: 100%;
+  border: 0;
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: linear-gradient(135deg, #f5b942, #e09a1a);
+  color: #1a1205;
+  transition: filter 0.15s, transform 0.15s;
+}
+
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.btn-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-ghost {
+  width: 100%;
+  margin-top: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.55rem 0.75rem;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+
+.btn-ghost:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.error-text {
+  margin: 0.5rem 0 0;
+  color: var(--danger);
+  font-size: 0.8rem;
+}
+
+.ok-text {
+  margin: 0.5rem 0 0;
+  color: var(--solar);
+  font-size: 0.8rem;
+}
+
+.divider {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 0.5rem 0 1rem;
+}
+
+.advanced {
+  margin-bottom: 1rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.advanced summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.advanced .input {
+  margin-top: 0.55rem;
+}
+
+.sat-map {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: #0b1220;
+}
+
+.sat-canvas {
+  display: block;
+  width: 100% !important;
+  height: auto !important;
+  max-width: 100%;
+}
+
+.sat-credit {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 0.2rem 0.45rem;
+  border-radius: 6px;
+  background: rgba(11, 18, 32, 0.75);
+  color: var(--text-dim);
+  font-size: 0.65rem;
+  font-family: var(--mono);
+}
+
+.sat-placeholder {
+  padding: 2rem 1.25rem;
+  border-radius: 12px;
+  border: 1px dashed var(--border-strong);
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.55;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.geo-label {
+  margin: 0.65rem 0 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
