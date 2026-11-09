@@ -3,13 +3,9 @@ import type { City } from "../data/cities";
 /** Modern residential panel assumptions (demo defaults). */
 export const PANEL = {
   efficiency: 0.2,
-  /** Installed DC watts per square foot of panel footprint. */
   wattsPerSqFt: 18,
-  /** System performance ratio (inverter, wiring, soiling, mismatch). */
   performanceRatio: 0.85,
-  /** Typical usable fraction after setbacks, vents, edges. */
   setbackFactor: 0.7,
-  /** Default orientation/tilt derate for mixed US roofs. */
   orientationFactor: 0.9,
 } as const;
 
@@ -21,34 +17,41 @@ export const SHADING_FACTOR: Record<ShadingLevel, number> = {
   heavy: 0.55,
 };
 
-export type RoofSource = "heuristic" | "satellite_osm" | "google_solar";
+export type RoofSource =
+  | "heuristic"
+  | "satellite_osm"
+  | "satellite_ms"
+  | "manual"
+  | "google_solar";
 
 export interface SatelliteRoofInput {
   source: RoofSource;
-  /** Building footprint / whole roof (sq ft). */
   footprintSqFt: number;
-  /** Pre-computed eligible panel area when provider supplies it (sq ft). */
   eligibleSqFt?: number;
-  /** Optional annual sunshine hours from Google Solar. */
   maxSunshineHoursPerYear?: number;
 }
 
+export interface ClimateInput {
+  lat: number;
+  peakSunHours: number;
+  cloudCoverPct: number;
+  avgTempF: number;
+  ratePerKwh: number;
+}
+
 export interface HomeInputs {
-  /** Heated/finished floor area (sq ft). Used when no satellite roof. */
   floorAreaSqFt: number;
-  /** Number of stories (affects roof footprint estimate). */
   stories: number;
-  /** Roof pitch factor: flat≈1.0, moderate≈1.15, steep≈1.3 */
   roofPitchFactor: number;
   shading: ShadingLevel;
-  /** Share of eligible roof covered with panels (0–1). */
   coveragePortion: number;
-  /** Monthly household electricity use (kWh). */
   monthlyKwh: number;
-  /** Optional override of city default rate ($/kWh). */
   ratePerKwh?: number;
-  /** When set, overrides heuristic roof sizing. */
   satelliteRoof?: SatelliteRoofInput;
+  climate?: ClimateInput;
+  /** Override annual production (e.g. NREL PVWatts). */
+  productionOverrideKwh?: number;
+  productionOverrideMonthly?: number[];
 }
 
 export interface MonthlyPoint {
@@ -77,6 +80,7 @@ export interface SolarResult {
   avgTempF: number;
   monthly: MonthlyPoint[];
   roofSource: RoofSource;
+  productionSource: "model" | "pvwatts" | "google_sunshine";
 }
 
 const MONTHS = [
@@ -94,17 +98,11 @@ const MONTHS = [
   "Dec",
 ] as const;
 
-/** Days per month (non-leap) for monthly allocation. */
 const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
-/**
- * Seasonal sun-hour multiplier by month.
- * Peak in summer (index 5–7), trough in winter — amplitude scales with latitude.
- */
 function monthlySunFactors(lat: number): number[] {
   const amplitude = 0.18 + Math.min(Math.abs(lat) / 90, 0.55) * 0.35;
   return DAYS_IN_MONTH.map((_, i) => {
-    // Month center angle; max near June (i≈5) in northern hemisphere
     const angle = ((i - 5) / 12) * 2 * Math.PI;
     return 1 - amplitude * Math.cos(angle);
   });
@@ -135,6 +133,13 @@ export function eligibleRoofSqFt(
 
 export function calculateSolar(city: City, inputs: HomeInputs): SolarResult {
   const sat = inputs.satelliteRoof;
+  const climate = inputs.climate;
+  const lat = climate?.lat ?? city.lat;
+  const basePsh = climate?.peakSunHours ?? city.peakSunHours;
+  const cloud = climate?.cloudCoverPct ?? city.cloudCoverPct;
+  const temp = climate?.avgTempF ?? city.avgTempF;
+  const defaultRate = climate?.ratePerKwh ?? city.ratePerKwh;
+
   let footprint: number;
   let totalRoof: number;
   let eligible: number;
@@ -143,19 +148,15 @@ export function calculateSolar(city: City, inputs: HomeInputs): SolarResult {
   if (sat && sat.footprintSqFt > 0) {
     roofSource = sat.source;
     footprint = sat.footprintSqFt;
-    // Satellite footprints are plan-view; apply pitch for surface when OSM-only
     totalRoof =
       sat.source === "google_solar"
         ? sat.footprintSqFt
         : sat.footprintSqFt * inputs.roofPitchFactor;
 
     if (sat.eligibleSqFt != null && sat.eligibleSqFt > 0) {
-      // Provider already accounted for setbacks / panelable area
       eligible =
         sat.eligibleSqFt *
-        (sat.source === "google_solar"
-          ? 1
-          : SHADING_FACTOR[inputs.shading]);
+        (sat.source === "google_solar" ? 1 : SHADING_FACTOR[inputs.shading]);
     } else {
       eligible = eligibleRoofSqFt(totalRoof, inputs.shading);
     }
@@ -174,27 +175,42 @@ export function calculateSolar(city: City, inputs: HomeInputs): SolarResult {
   const panelArea = eligible * portion;
   const systemSizeKw = (panelArea * PANEL.wattsPerSqFt) / 1000;
 
-  const rate = inputs.ratePerKwh ?? city.ratePerKwh;
+  const rate = inputs.ratePerKwh ?? defaultRate;
   const annualUsage = inputs.monthlyKwh * 12;
 
-  // Effective daily peak sun hours adjusted slightly by cloud cover vs baseline
-  const cloudAdj = 1 - (city.cloudCoverPct - 40) * 0.002;
-  let psh = city.peakSunHours * Math.max(0.75, Math.min(1.15, cloudAdj));
+  const cloudAdj = 1 - (cloud - 40) * 0.002;
+  let psh = basePsh * Math.max(0.75, Math.min(1.15, cloudAdj));
+  let productionSource: SolarResult["productionSource"] = "model";
 
-  // Prefer imagery-derived annual sunshine when Google Solar provides it
   if (sat?.maxSunshineHoursPerYear && sat.maxSunshineHoursPerYear > 0) {
     psh = sat.maxSunshineHoursPerYear / 365;
+    productionSource = "google_sunshine";
   }
 
-  const annualProduction =
-    systemSizeKw * psh * 365 * PANEL.performanceRatio;
+  let annualProduction = systemSizeKw * psh * 365 * PANEL.performanceRatio;
+  let monthlyProduction: number[] | null = null;
 
-  const factors = monthlySunFactors(city.lat);
+  if (
+    inputs.productionOverrideKwh != null &&
+    inputs.productionOverrideKwh > 0
+  ) {
+    annualProduction = inputs.productionOverrideKwh;
+    productionSource = "pvwatts";
+    if (
+      inputs.productionOverrideMonthly &&
+      inputs.productionOverrideMonthly.length === 12
+    ) {
+      monthlyProduction = inputs.productionOverrideMonthly;
+    }
+  }
+
+  const factors = monthlySunFactors(lat);
   const factorSum = factors.reduce((a, b) => a + b, 0);
 
   const monthly: MonthlyPoint[] = MONTHS.map((month, i) => {
-    const share = factors[i] / factorSum;
-    const productionKwh = annualProduction * share;
+    const productionKwh = monthlyProduction
+      ? monthlyProduction[i]
+      : annualProduction * (factors[i] / factorSum);
     const usageKwh = annualUsage * (DAYS_IN_MONTH[i] / 365);
     const offsetKwh = Math.min(productionKwh, usageKwh);
     return { month, productionKwh, usageKwh, offsetKwh };
@@ -203,7 +219,6 @@ export function calculateSolar(city: City, inputs: HomeInputs): SolarResult {
   const offsetKwh = Math.min(annualProduction, annualUsage);
   const billBefore = annualUsage * rate;
   const billAfter = Math.max(0, annualUsage - offsetKwh) * rate;
-  const annualSavings = billBefore - billAfter;
 
   return {
     roofFootprintSqFt: footprint,
@@ -215,15 +230,16 @@ export function calculateSolar(city: City, inputs: HomeInputs): SolarResult {
     annualUsageKwh: annualUsage,
     offsetKwh,
     offsetPct: annualUsage > 0 ? (offsetKwh / annualUsage) * 100 : 0,
-    annualSavingsUsd: annualSavings,
+    annualSavingsUsd: billBefore - billAfter,
     billBeforeUsd: billBefore,
     billAfterUsd: billAfter,
     ratePerKwh: rate,
     peakSunHours: psh,
-    cloudCoverPct: city.cloudCoverPct,
-    avgTempF: city.avgTempF,
+    cloudCoverPct: cloud,
+    avgTempF: temp,
     monthly,
     roofSource,
+    productionSource,
   };
 }
 

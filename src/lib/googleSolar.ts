@@ -1,6 +1,7 @@
 import { m2ToSqFt, type GeoPoint } from "./geo";
 
 const STORAGE_KEY = "hometown_solar_google_api_key";
+const NREL_KEY = "hometown_solar_nrel_api_key";
 
 export function loadGoogleApiKey(): string {
   try {
@@ -15,16 +16,38 @@ export function saveGoogleApiKey(key: string): void {
     if (key.trim()) localStorage.setItem(STORAGE_KEY, key.trim());
     else localStorage.removeItem(STORAGE_KEY);
   } catch {
-    /* ignore quota / private mode */
+    /* ignore */
   }
+}
+
+export function loadNrelApiKey(): string {
+  try {
+    return localStorage.getItem(NREL_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function saveNrelApiKey(key: string): void {
+  try {
+    if (key.trim()) localStorage.setItem(NREL_KEY, key.trim());
+    else localStorage.removeItem(NREL_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+export interface RoofSegment {
+  areaSqFt: number;
+  pitchDegrees?: number;
+  azimuthDegrees?: number;
+  sunshineQuantile?: number;
 }
 
 export interface GoogleSolarRoof {
   source: "google_solar";
   center: GeoPoint;
-  /** Whole-roof area from imagery analysis (sq ft). */
   roofAreaSqFt: number;
-  /** Max area that can hold panels (sq ft) — best “eligible” signal. */
   eligiblePanelAreaSqFt: number;
   maxArrayPanelsCount: number;
   maxSunshineHoursPerYear?: number;
@@ -32,6 +55,10 @@ export interface GoogleSolarRoof {
   imageryDate?: string;
   postalCode?: string;
   administrativeArea?: string;
+  segments: RoofSegment[];
+  /** Optional RGB imagery URL from dataLayers (may need key). */
+  rgbUrl?: string;
+  maskUrl?: string;
   raw?: unknown;
 }
 
@@ -51,7 +78,7 @@ interface BuildingInsightsResponse {
       sunshineQuantiles?: number[];
     };
     roofSegmentStats?: Array<{
-      stats?: { areaMeters2?: number };
+      stats?: { areaMeters2?: number; sunshineQuantiles?: number[] };
       pitchDegrees?: number;
       azimuthDegrees?: number;
     }>;
@@ -59,11 +86,6 @@ interface BuildingInsightsResponse {
   error?: { message?: string; status?: string };
 }
 
-/**
- * Google Solar API — building insights from aerial/satellite imagery.
- * Requires a Google Maps Platform key with the Solar API enabled.
- * https://developers.google.com/maps/documentation/solar
- */
 export async function fetchGoogleSolarBuilding(
   point: GeoPoint,
   apiKey: string,
@@ -107,6 +129,38 @@ export async function fetchGoogleSolarBuilding(
     imageryDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
   }
 
+  const segments: RoofSegment[] = (pot.roofSegmentStats ?? []).map((s) => ({
+    areaSqFt: m2ToSqFt(s.stats?.areaMeters2 ?? 0),
+    pitchDegrees: s.pitchDegrees,
+    azimuthDegrees: s.azimuthDegrees,
+    sunshineQuantile: s.stats?.sunshineQuantiles?.[5],
+  }));
+
+  // Best-effort dataLayers URLs for imagery (GeoTIFF links — shown as status, not always browser-displayable)
+  let rgbUrl: string | undefined;
+  let maskUrl: string | undefined;
+  try {
+    const dl = new URL("https://solar.googleapis.com/v1/dataLayers:get");
+    dl.searchParams.set("location.latitude", String(center.lat));
+    dl.searchParams.set("location.longitude", String(center.lon));
+    dl.searchParams.set("radiusMeters", "50");
+    dl.searchParams.set("view", "FULL_LAYERS");
+    dl.searchParams.set("requiredQuality", "MEDIUM");
+    dl.searchParams.set("pixelSizeMeters", "0.5");
+    dl.searchParams.set("key", key);
+    const dlRes = await fetch(dl.toString(), { signal });
+    if (dlRes.ok) {
+      const layers = (await dlRes.json()) as {
+        rgbUrl?: string;
+        maskUrl?: string;
+      };
+      rgbUrl = layers.rgbUrl;
+      maskUrl = layers.maskUrl;
+    }
+  } catch {
+    /* optional */
+  }
+
   return {
     source: "google_solar",
     center,
@@ -118,6 +172,9 @@ export async function fetchGoogleSolarBuilding(
     imageryDate,
     postalCode: data.postalCode,
     administrativeArea: data.administrativeArea,
+    segments,
+    rgbUrl,
+    maskUrl,
     raw: data,
   };
 }

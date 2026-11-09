@@ -1,53 +1,75 @@
 # Hometown Solar Savings
 
-Interactive web demo: pick a U.S. hometown, estimate eligible roof coverage, apply local average weather/sun, and see how much electricity and money solar could offset for a portion of your roof.
+Interactive web demo: enter a U.S. address, measure eligible roof area from satellite imagery + building outlines, apply local climate/rates, and estimate production, bill savings, ITC-adjusted cost, and payback.
 
 **Live demo:** [https://aidenterry02.github.io/SolarPowerSimulation/](https://aidenterry02.github.io/SolarPowerSimulation/)
 
-**Portfolio:** [https://aidenterry02.github.io/portfolio_webstite/](https://aidenterry02.github.io/portfolio_webstite/)
+**Portfolio:** [https://aidenterry02.github.io/portfolio_webstite/](https://aidenterry02.github.io/portfolio_webstite/) · solar shortcut: [/portfolio_webstite/solar](https://aidenterry02.github.io/portfolio_webstite/solar)
 
-## What it does
+## Architecture
 
-1. **Hometown picker** — search ~100 U.S. cities with lat/lon, peak sun hours, cloud cover, temperature, and default $/kWh.
-2. **Satellite roof scan** — enter a street address → geocode → Esri satellite basemap + OpenStreetMap building outline area. Optional [Google Solar API](https://developers.google.com/maps/documentation/solar) key for imagery-ML panelable roof area.
-3. **Roof eligibility** — satellite footprint (or home-size heuristic fallback) → pitch / setbacks / shading → eligible panel area.
-4. **Coverage slider** — install panels on a portion of eligible roof.
-5. **Production & savings** — annual and monthly kWh, % of usage offset, simple before/after bill estimate.
+```
+Address autocomplete (Nominatim)
+        │
+        ▼
+Interactive Esri satellite map (Leaflet)
+        │
+        ├─► OSM Overpass building candidates (scored)
+        ├─► MS/Esri structures fallback
+        └─► Optional Google Solar (panelable area + segments)
+        │
+        ▼
+Climate from lat/lon (nearest city blend)
+        │
+        ▼
+solarCalc → economics (ITC, net metering, 25y cashflow)
+        │
+        ├─► Optional NREL PVWatts production override
+        └─► Share URL + summary card
+```
+
+Optional Cloudflare Worker proxy: see [`worker/`](./worker/).
+
+## Wizard flow
+
+1. **Address** — autocomplete, analyze roof  
+2. **Roof** — map pin, multi-building picker, confidence meter  
+3. **System** — coverage, usage, $/W, ITC, net metering  
+4. **Results** — charts, payback, share link  
 
 ## Run locally
 
 ```bash
 npm install
 npm run dev
+npm test
 ```
 
-Open the URL Vite prints (default `http://localhost:5173/SolarPowerSimulation/`).
-
-## Build & deploy (GitHub Pages)
+## Deploy (GitHub Pages)
 
 ```bash
-npm install
-npm run build
 npm run deploy
 ```
 
-`deploy` pushes the `dist/` folder to the `gh-pages` branch. In the GitHub repo settings, set Pages source to **Deploy from a branch** → `gh-pages` / root (or use the included GitHub Action).
+Base path: `/SolarPowerSimulation/`.
 
-Site base path is `/SolarPowerSimulation/` (see `vite.config.ts`).
+## Optional API keys (browser localStorage)
 
-## Model notes (transparent)
+| Key | Purpose |
+| --- | --- |
+| Google Solar | Imagery-ML eligible area, segments, sunshine hours |
+| NREL PVWatts | Site-specific AC production override |
+
+## Model notes
 
 | Piece | Approach |
 | --- | --- |
-| Roof footprint | floor area ÷ stories |
-| Roof surface | footprint × pitch factor |
-| Eligible area | surface × setbacks (0.7) × orientation (0.9) × shading |
-| System size | panel sq ft × 18 W/ft² |
-| Annual kWh | kW × peak sun hours × 365 × 0.85 PR |
-| Monthly shape | latitude-scaled seasonal curve |
-| $ savings | min(production, usage) × rate (no net metering credit) |
+| Roof | Satellite footprint / Google eligible / heuristic fallback |
+| Climate | Nearest catalog city + lat blend |
+| kWh | kW × PSH × 365 × PR (or PVWatts) |
+| $ | Self-use + NM export credit; ITC on install; 25y degradation/inflation |
 
-Legacy city-scale Python script: `SolarPowerSim.py` (SF / Chicago / Dallas stock model).
+Legacy city-scale Python: `SolarPowerSim.py`.
 
 ## License
 
