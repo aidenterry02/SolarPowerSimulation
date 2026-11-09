@@ -1,130 +1,53 @@
-# Solar Energy Simulation for Urban Cities - README
+# Hometown Solar Savings
 
-## Overview
-This Python script simulates the potential for solar energy production in urban areas and evaluates how much of each city's daily and annual energy consumption can be offset by solar power. The simulation considers various building types, rooftop suitability, seasonal changes, and city-specific energy consumption.
+Interactive web demo: pick a U.S. hometown, estimate eligible roof coverage, apply local average weather/sun, and see how much electricity and money solar could offset for a portion of your roof.
 
----
+**Live demo:** [https://aidenterry02.github.io/SolarPowerSimulation/](https://aidenterry02.github.io/SolarPowerSimulation/)
 
-## Features
-1. **City-Specific Solar Simulations**:
-   - Simulates solar energy production for San Francisco, Chicago, and Dallas.
-   - Calculates the contribution of different building types (Residential, Commercial, Gas Stations, Parking Garages).
+**Portfolio:** [https://aidenterry02.github.io/portfolio_webstite/](https://aidenterry02.github.io/portfolio_webstite/)
 
-2. **Energy Consumption Analysis**:
-   - Estimates the daily and yearly percentage of city energy consumption offset by solar power.
+## What it does
 
-3. **Dynamic Seasonal Factors**:
-   - Adjusts solar output based on seasonal variations in sunlight availability.
+1. **Hometown picker** — search ~100 U.S. cities with lat/lon, peak sun hours, cloud cover, temperature, and default $/kWh.
+2. **Roof eligibility** — from floor area, stories, pitch, and shading → footprint → surface area → usable area after setbacks/orientation/shade.
+3. **Coverage slider** — install panels on a portion of eligible roof.
+4. **Production & savings** — annual and monthly kWh, % of usage offset, simple before/after bill estimate.
 
-4. **Visualization**:
-   - Plots the daily percentage of energy consumption met by solar for each city across the year.
+## Run locally
 
----
-
-## Prerequisites
-1. **Python 3.x** installed on your machine.
-2. Required libraries:
-   - `numpy`
-   - `matplotlib`
-
-Install dependencies using:
 ```bash
-pip install numpy matplotlib
+npm install
+npm run dev
 ```
 
----
+Open the URL Vite prints (default `http://localhost:5173/SolarPowerSimulation/`).
 
-## How It Works
+## Build & deploy (GitHub Pages)
 
-### 1. **Constants and Assumptions**
-- **Panel Efficiency**: 16%
-- **Efficiency Loss**: 85%
-- **Rooftop Suitability**: 30%
-- **Daily Solar Irradiance**: Adjusted based on cloud cover.
-- **Building Data**: Average rooftop areas, number of buildings, and roof coverage factors for each city.
+```bash
+npm install
+npm run build
+npm run deploy
+```
 
-### 2. **Simulation Logic**
-- **Solar Energy Production**:
-  - Calculates usable rooftop area for each building type.
-  - Computes total solar energy based on irradiance, hours of sunlight, and efficiency factors.
-  
-- **City Energy Consumption**:
-  - Compares solar energy production to city-wide energy consumption to estimate daily and yearly offsets.
+`deploy` pushes the `dist/` folder to the `gh-pages` branch. In the GitHub repo settings, set Pages source to **Deploy from a branch** → `gh-pages` / root (or use the included GitHub Action).
 
-- **Seasonal Adjustments**:
-  - Applies sinusoidal seasonal factors to mimic real-world variations in solar irradiance.
+Site base path is `/SolarPowerSimulation/` (see `vite.config.ts`).
 
-### 3. **Visualization**
-- Plots the daily percentage of energy consumption met by solar power for each city.
+## Model notes (transparent)
 
----
+| Piece | Approach |
+| --- | --- |
+| Roof footprint | floor area ÷ stories |
+| Roof surface | footprint × pitch factor |
+| Eligible area | surface × setbacks (0.7) × orientation (0.9) × shading |
+| System size | panel sq ft × 18 W/ft² |
+| Annual kWh | kW × peak sun hours × 365 × 0.85 PR |
+| Monthly shape | latitude-scaled seasonal curve |
+| $ savings | min(production, usage) × rate (no net metering credit) |
 
-## Usage
-1. Run the script using Python:
-   ```bash
-   python solar_energy_simulation.py
-   ```
-
-2. **Output**:
-   - A plot showing the daily percentage of energy consumption offset by solar power for San Francisco, Chicago, and Dallas.
-   - Simulation results for each city, including:
-     - Daily solar energy contributions by building type.
-     - Annual percentage of energy offset.
-     - Total yearly solar energy output vs. consumption.
-
----
-
-## Example Plot
-The output graph visualizes the daily percentage of energy consumption met by solar for each city, demonstrating seasonal variations and differences in energy offset potential between cities.
-
----
-
-## Key Functions
-
-### **`get_solar_irradiance(cloud_cover)`**
-Calculates solar irradiance based on the given cloud cover percentage.
-
-### **`calculate_solar_energy(area, solar_irradiance, ...)`**
-Estimates the solar energy produced for a given rooftop area.
-
-### **`calculate_total_solar_energy(city_name, ...)`**
-Calculates total solar energy production for a city, broken down by building type.
-
-### **`calculate_daily_percentage_consumption(city_name, ...)`**
-Computes the daily percentage of energy consumption offset by solar for each day of the year.
-
-### **`calculate_yearly_percentage_consumption(city_name, ...)`**
-Calculates the yearly percentage of energy consumption offset and total yearly solar output.
-
-### **`run_city_simulation(city_name)`**
-Runs the simulation for a specified city and returns detailed results.
-
----
-
-## Customization
-- **City Data**: Modify the `CITY_BUILDING_TYPES` and `CITY_POWER_CONSUMPTION` dictionaries to add more cities or update existing data.
-- **Solar Panel Efficiency**: Adjust the `PANEL_EFFICIENCY` constant to reflect advancements in solar technology.
-- **Cloud Cover and Sunlight Hours**: Customize cloud cover and sunlight assumptions for each city.
-
----
-
-## Limitations
-1. **Simplified Assumptions**:
-   - Fixed rooftop suitability and efficiency factors.
-   - Does not consider shading, orientation, or local climate variations.
-2. **City-Specific Data**:
-   - Limited to predefined cities; additional cities require data input.
-3. **Dynamic Weather**:
-   - Cloud cover is averaged and does not reflect daily weather fluctuations.
-
----
-
-## Future Enhancements
-1. Incorporate real-time weather data for more accurate simulations.
-2. Expand to additional cities and building types.
-3. Account for economic factors, such as installation costs and energy savings.
-
----
+Legacy city-scale Python script: `SolarPowerSim.py` (SF / Chicago / Dallas stock model).
 
 ## License
-This script is provided for educational and personal use. Ensure compliance with local laws and regulations when applying the results to real-world scenarios.
+
+See [LICENSE](./LICENSE).
